@@ -1,0 +1,166 @@
+---
+
+- name: aws setup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    iam_admin_user:
+      - mdelbrue
+      - cschreiner
+      - grieger
+    temp_pass: "sB36DcWjK7Ytf7VV"
+    iac_cidr: "172.32.21.0/24"
+    region: "eu-central-1"
+
+  environment:
+    AWS_PROFILE: digitalpower
+
+  tasks:
+    - name: create iam users
+      block:
+        - name: create iam admin role
+          iam_group:
+            name: admin
+            state: present
+            managed_policy:
+              - arn:aws:iam::aws:policy/AdministratorAccess
+              - arn:aws:iam::aws:policy/job-function/Billing
+          register:
+
+        - name: Create new IAM users with API keys
+          iam:
+            iam_type: user
+            name: "{{ item }}"
+            state: present
+            password: "{{ temp_pass }}"
+            access_key_state: create
+          loop: "{{ iam_admin_user }}"
+      tags:
+        - iam_user
+
+    - name: setup network
+      block:
+        - name: create VPC
+          ec2_vpc_net:
+            name: IAC_Net
+            cidr_block: "{{ iac_cidr }}"
+            state: present
+            region: "{{ region }}"
+            tags:
+              Name: iacNet
+              Owner: mdelbrue
+              Stage: Production
+              Managed: "Ansible"
+          register: iac_vpc
+
+        - name: create subnets
+          ec2_vpc_subnet:
+            vpc_id: "{{ iac_vpc.vpc.id }}"
+            cidr: "172.32.21.0/28"
+            state: present
+            region: "{{ region }}"
+            tags:
+              Name: "IACSubnet"
+              Owner: "mdelbrue"
+              Stage: "Production"
+              Managed: "Ansible"
+          register: iac_subnet
+
+        - name: create Web SecGroup
+          ec2_group:
+            name: HTTP_Sec_Group
+            description: HTTP, HTTPS
+            vpc_id: "{{ iac_vpc.vpc.id }}"
+            region: "{{ region }}"
+            rules:
+              - proto: tcp
+                ports:
+                  - 80
+                  - 443
+                cidr_ip: "0.0.0.0/0"
+                cidr_ipv6: "::/0"
+            tags:
+              Name: "HTTPAccess "
+              Owner: mdelbrue
+              Stage: "Production"
+              Managed: "Ansible"
+          register: iac_secgrp_web
+
+        - name: create SSH SecGroup
+          ec2_group:
+            name: SSH_Sec_Group
+            description: SSH
+            vpc_id: "{{ iac_vpc.vpc.id }}"
+            region: "{{ region }}"
+            rules:
+              - proto: tcp
+                ports:
+                  - 22
+                cidr_ip: "0.0.0.0/0"
+                cidr_ipv6: "::/0"
+            tags:
+              Name: "HTTPAccess "
+              Owner: mdelbrue
+              Stage: "Production"
+              Managed: "Ansible"
+          register: iac_secgrp_ssh
+
+        - name: create ec2 ssh key
+          ec2_key:
+            region: "{{ region }}"
+            name: mdelbrue_ec2
+          register: iac_sshkey
+
+        - name: Save private key
+          copy: content="{{ iac_sshkey.key.private_key }}" dest="~/.ssh/aws.iac.pem" mode=0600
+          when: iac_sshkey.changed
+
+    - name: setup monitoring
+      block:
+        - name: create prometheus instance
+          ec2:
+            instance_type: t2.micro
+            image: ami-04cf43aca3e6f3de3
+            region: "{{ region }}"
+            key_name: mdelbrue_ec2
+            vpc_subnet_id: "{{ iac_subnet.subnet.id }}"
+            instance_tags:
+                Name: "Prometheus"
+                Owner: "mdelbrue"
+                Stage: "Production"
+                Managed: "Ansible"
+            assign_public_ip: yes
+            group:
+              - "{{ iac_secgrp_web.group_name }}"
+              - "{{ iac_secgrp_ssh.group_name }}"
+            wait: yes
+            count_tag:
+              Name: Prometheus
+            exact_count: 1
+          register: iac_instance_prometheus
+
+        - name: create prometheus instance
+          ec2:
+            instance_type: t2.micro
+            image: ami-04cf43aca3e6f3de3
+            region: "{{ region }}"
+            key_name: mdelbrue_ec2
+            vpc_subnet_id: "{{ iac_subnet.subnet.id }}"
+            instance_tags:
+                Name: "Grafana"
+                Owner: "mdelbrue"
+                Stage: "Production"
+                Managed: "Ansible"
+            assign_public_ip: yes
+            group:
+              - "{{ iac_secgrp_web.group_name }}"
+              - "{{ iac_secgrp_ssh.group_name }}"
+            wait: yes
+            count_tag:
+              Name: Grafana
+            exact_count: 1
+          register: iac_instance_grafana
+
+# - hosts:
