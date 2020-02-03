@@ -1,0 +1,28 @@
+---
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: Prometheus
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+    - targets:
+      - localhost:9090
+
+{% if prometheus.nodes |length > 0 %}
+  - job_name: Website
+    metrics_path: /metrics
+    scheme: http
+    scrape_interval: 5s
+    static_configs:
+      - targets:
+    {% for node in prometheus.nodes %}
+    - {{ node }}
+    {% endfor %}
+{% endif %}

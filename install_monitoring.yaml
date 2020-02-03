@@ -1,0 +1,160 @@
+---
+
+- name: install monitoring
+  hosts: monitoring
+  become: false
+  gather_facts: false
+  remote_user: ec2-user
+
+  tasks:
+    - name: install docker
+      yum:
+        pkg:
+          - docker
+          # - python3
+          # - python3-pip
+          # - libselinux-python
+        state: latest
+      become: true
+
+    - service:
+        name: docker
+        state: started
+        enabled: true
+      become: true
+
+    # - name: move to python3
+    #   file:
+    #     src: /usr/bin/python3
+    #     dest: /usr/bin/python
+    #     state: link
+    #   become: true
+
+    # - name: move to pip3
+    #   file:
+    #     src: /usr/bin/pip3
+    #     dest: /usr/bin/pip
+    #     state: link
+    #   become: true
+
+    - pip:
+        name: "{{ item }}"
+        state: latest
+      loop:
+        - docker-py
+      become: true
+
+    - name: Create monitoring network
+      docker_network:
+        name: monitoring
+      become: true
+
+    - name: setup prometheus
+      block:
+        - name: create prometheus folder
+          file:
+            path: "{{ item }}"
+            state: directory
+            owner: "{{ ansible_ssh_user }}"
+            group: "{{ ansible_ssh_user }}"
+          loop:
+            - /opt/prometheus
+          become: true
+
+        - template:
+            src: prometheus.yaml.j2
+            dest: /opt/prometheus/prometheus.yaml
+            owner: "{{ ansible_ssh_user }}"
+            group: "{{ ansible_ssh_user }}"
+
+        - name: start container
+          block:
+            - name: Create a volume for prometheus
+              docker_volume:
+                name: prometheus-data
+                state: present
+
+            - name: start prometheus
+              docker_container:
+                name: prometheus
+                image: prom/prometheus:v2.15.2
+                state: started
+                restart_policy: unless-stopped
+                recreate: true
+                exposed_ports:
+                  - "9090"
+                ports:
+                  - "9090:9090"
+                networks:
+                  - name: monitoring
+                volumes:
+                  - /opt/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
+                  - prometheus-data:/prometheus
+          become: true
+
+    - name: setup grafana
+      block:
+        - name: create prometheus folder
+          file:
+            path: "{{ item }}"
+            state: directory
+            owner: "{{ ansible_ssh_user }}"
+            group: "{{ ansible_ssh_user }}"
+          loop:
+            - /opt/grafana/provisioning
+            - /opt/grafana/provisioning/datasources
+            - /opt/grafana/provisioning/dashboards
+            - /opt/grafana/dashboards
+          become: true
+
+        - name: copy prometheus datasource
+          template:
+            src: datasource.yaml.j2
+            dest: /opt/grafana/provisioning/datasources/prometheus.yaml
+            owner: "{{ ansible_ssh_user }}"
+            group: "{{ ansible_ssh_user }}"
+
+        - name: copy klausurtagung.json dashboard
+          template:
+            src: klausurtagung.json.j2
+            dest: /opt/grafana/dashboards/klausurtagung.json
+            owner: "{{ ansible_ssh_user }}"
+            group: "{{ ansible_ssh_user }}"
+
+        - name: copy klausurtagung.yaml dashboard
+          template:
+            src: klausurtagung.yaml.j2
+            dest: /opt/grafana/provisioning/dashboards/klausurtagung.yaml
+            owner: "{{ ansible_ssh_user }}"
+            group: "{{ ansible_ssh_user }}"
+
+        - name: start container
+          block:
+            - name: create grafana volume
+              docker_volume:
+                name: grafana-data
+                state: present
+
+            - name: start grafana container
+              docker_container:
+                name: grafana
+                image: grafana/grafana:6.5.3
+                restart_policy: unless-stopped
+                recreate: true
+                expose:
+                  - "3000"
+                ports:
+                  - "3000:3000"
+                networks:
+                  - name: monitoring
+                volumes:
+                  - /opt/grafana/provisioning:/var/lib/grafana/provisioning/
+                  - /opt/grafana/dashboards:/var/lib/grafana/dashboards/
+                  - grafana-data:/var/lib/grafana
+                env:
+                  GF_AUTH_ANONYMOUS_ENABLED: 'true'
+                  GF_USERS_ALLOW_SIGN_UP: 'false'
+                  GF_SECURITY_ADMIN_PASSWORD: "{{ grafana.password }}"
+                  GF_PATHS_PROVISIONING: /var/lib/grafana/provisioning/
+                  TZ: "Europe/Berlin"
+          become: true

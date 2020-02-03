@@ -14,9 +14,6 @@
     iac_cidr: "172.32.21.0/24"
     region: "eu-central-1"
 
-  environment:
-    AWS_PROFILE: digitalpower
-
   tasks:
     - name: create iam users
       block:
@@ -79,6 +76,8 @@
                 ports:
                   - 80
                   - 443
+                  - 3000
+                  - 9090
                 cidr_ip: "0.0.0.0/0"
                 cidr_ipv6: "::/0"
             tags:
@@ -119,15 +118,15 @@
 
     - name: setup monitoring
       block:
-        - name: create prometheus instance
+        - name: create monitoring instance
           ec2:
             instance_type: t2.micro
-            image: ami-04cf43aca3e6f3de3
+            image: ami-0ab838eeee7f316eb
             region: "{{ region }}"
             key_name: mdelbrue_ec2
             vpc_subnet_id: "{{ iac_subnet.subnet.id }}"
             instance_tags:
-                Name: "Prometheus"
+                Name: "monitoring"
                 Owner: "mdelbrue"
                 Stage: "Production"
                 Managed: "Ansible"
@@ -137,30 +136,13 @@
               - "{{ iac_secgrp_ssh.group_name }}"
             wait: yes
             count_tag:
-              Name: Prometheus
+              Name: monitoring
             exact_count: 1
-          register: iac_instance_prometheus
+          register: iac_instance_monitoring
+      tags:
+        - monitoring
 
-        - name: create prometheus instance
-          ec2:
-            instance_type: t2.micro
-            image: ami-04cf43aca3e6f3de3
-            region: "{{ region }}"
-            key_name: mdelbrue_ec2
-            vpc_subnet_id: "{{ iac_subnet.subnet.id }}"
-            instance_tags:
-                Name: "Grafana"
-                Owner: "mdelbrue"
-                Stage: "Production"
-                Managed: "Ansible"
-            assign_public_ip: yes
-            group:
-              - "{{ iac_secgrp_web.group_name }}"
-              - "{{ iac_secgrp_ssh.group_name }}"
-            wait: yes
-            count_tag:
-              Name: Grafana
-            exact_count: 1
-          register: iac_instance_grafana
-
-# - hosts:
+    - name: Make result values available to Playbooks in workflow
+      set_stats:
+        data:
+          monitoring_instance: "{{ iac_instance_monitoring }}"
